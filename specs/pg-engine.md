@@ -17,7 +17,11 @@ multi-sentencia, `load_tables()`, tipos PG, booleanos/`None` reales y
 ### PE-01 — ciclo de vida
 - **Given** binarios PG 17.11 vendoreados
 - **When** `PGEngine()` + `close()`
-- **Then** cluster template en `%TEMP%/sqllab-pgdata-17` (initdb solo la primera vez), servidor en puerto libre, BD de sesión `sqllab_<pid>` creada; al cerrar: DROP + stop + sin procesos residuales. Sin `pg_ctl` (se cuelga: `Popen(postgres)` + poll TCP + `terminate`).
+- **Then** cluster template en `%LOCALAPPDATA%/SQLab/sqllab-pgdata-17`
+  (fallback `%TEMP%`; ver Enmienda PE-E01), initdb solo la primera vez,
+  servidor en puerto libre, BD de sesión `sqllab_<pid>` creada; al cerrar:
+  DROP + stop + sin procesos residuales. Sin `pg_ctl` (se cuelga:
+  `Popen(postgres)` + poll TCP + `terminate`).
 
 ### PE-02 — execute paridad
 - **Given** sesión con tablas
@@ -63,3 +67,13 @@ multi-sentencia, `load_tables()`, tipos PG, booleanos/`None` reales y
 - `sqlite_engine.py` congelado (no se toca) hasta F6.
 - Reuso interno: `_partir_sentencias` importado de `core.sqlite_engine` (misma semántica `;`).
 - Efímero por decisión: template cacheado + BD de sesión `sqllab_<pid>` con DROP al cerrar.
+
+## Enmienda PE-E01 (2026-10-07) — ubicación y autoreparación del template
+- **Por qué**: el limpiador de Temp (Storage Sense) purgaba
+  `%TEMP%/sqllab-pgdata-17` dejándolo sin `PG_VERSION` → arranque con
+  "MOTOR NO DISPONIBLE".
+- **Qué cambia**: la ruta por defecto pasa a `%LOCALAPPDATA%/SQLab/…`
+  (fallback Temp) y `_asegurar_cluster()` repara templates corruptos y
+  adopta servidores vivos.
+- **Detalle y AC**: spec `specs/fix-template-pg-corrupto.md`
+  (CR-01..CR-07 + Enmienda E-01); tests `tests/test_fix_template_pg.py`.

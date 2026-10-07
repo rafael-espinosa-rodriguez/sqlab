@@ -164,6 +164,22 @@ sin reloj/ticks, sin testigos T1/T2/IO, sin tarjeta IA Link, sin ASCII-art.
   "t"/"f"), `DATE` y `TIMESTAMP` ISO validadas; conversión a `bool` real en
   CSV/JSON/Excel (PG aborta INSERT con texto en BOOLEAN); JSON/TEXT intactos.
 
+## Template PG fuera de Temp + autoreparación (v35)
+- Bug "MOTOR NO DISPONIBLE": el limpiador de Temp (Storage Sense) purgó
+  `%TEMP%/sqllab-pgdata-17` (sin `PG_VERSION` ni conf) e `initdb` se negaba
+  sobre el directorio no vacío.
+- Ruta por defecto → `%LOCALAPPDATA%/SQLab/sqllab-pgdata-17` (fallback Temp);
+  `base_dir` explícito manda (tests/fixture lo usan con template dedicado).
+- Orden de reparación: `PG_VERSION` → sonda del servidor vivo → vaciar →
+  `initdb` → adopción si otro proceso ganó la carrera → error accionable.
+  Regla: **adoptar antes de borrar**; con servidor TCP escuchando jamás se
+  vacía (error en español con la ruta).
+- Hallazgo E-01: sin `PG_VERSION` el postmaster vivo rechaza conexiones
+  (`CheckDataVersion`) → se restaura la marca (`17\n`, escritura en binario
+  porque el modo texto Windows deja `\r\n`) para adoptar; si aun así no
+  responde, la marca se deshace (no enmascarar) y se espera a que el servidor
+  caiga para reparar solo.
+
 ## Corte de la UI a PostgreSQL (v33, F4)
 - `MainWindow(engine=)` + arranque async en producción (`_HiloArranque` con
   señales listo/fallo; guards `MOTOR INICIANDO...` en entradas; `closeEvent`

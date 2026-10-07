@@ -57,6 +57,7 @@ _SPEC_MAP: dict[str, str] = {
     "test_pg_engine": "pg-engine",
     "test_error_friendly_pg": "error-friendly-pg",
     "test_carga_tipos_pg": "carga-tipos-pg",
+    "test_fix_template_pg": "fix-template-pg-corrupto",
 }
 
 

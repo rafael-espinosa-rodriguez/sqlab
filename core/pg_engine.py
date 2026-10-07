@@ -6,11 +6,17 @@ postgres-embebido-spike), BD de sesión `sqllab_<pid>` con DROP al cerrar.
 
 Paridad de API con `SQLEngine`: `execute()` multi-sentencia, `load_tables()`
 que devuelve omitidas, `table_names()`/`column_names()`, `exportar_db`.
+
+Autoreparación del template (spec fix-template-pg-corrupto): si un limpiador
+de `%TEMP%` deja el cluster a medias (sin `PG_VERSION`) se vacía y vuelve a
+inicializar; el template vive fuera de Temp (`%LOCALAPPDATA%\\SQLab`) para que
+no vuelva a ser purgado.
 """
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -45,6 +51,50 @@ def _pg_bin_dir() -> str | None:
 
 
 PG_BIN_DIR = _pg_bin_dir()
+
+
+def _dir_base_default() -> str:
+    """Carpeta estable para el template, fuera de `%TEMP%` (spec
+    fix-template-pg-corrupto): los limpiadores de Temp (Storage Sense y
+    similares) purgan archivos antiguos y dejan el cluster a medias.
+
+    Prefiere `%LOCALAPPDATA%\\SQLab`; sin `LOCALAPPDATA` (o no definida)
+    cae en `%TEMP%`, como antes.
+    """
+    appdata = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if not appdata:
+        return tempfile.gettempdir()
+    return os.path.join(appdata, "SQLab")
+
+
+def _resolver_base(base_dir: str | None) -> str:
+    """Directorio del template: siempre creado como carpeta propia.
+
+    Con `base_dir` explícito se usa tal cual (tests/arranque compartido);
+    sin él se prefiere `%LOCALAPPDATA%\\SQLab` y, si no es creable, se cae a
+    `%TEMP%`. Si ni una ni otra se pueden crear, error claro (CR-06).
+    """
+    if base_dir:
+        candidatos = [os.path.join(base_dir, _TEMPLATE_DIR)]
+    else:
+        candidatos = [
+            os.path.join(_dir_base_default(), _TEMPLATE_DIR),
+            os.path.join(tempfile.gettempdir(), _TEMPLATE_DIR),
+        ]
+    vistos: set[str] = set()
+    ultimo_error: OSError | None = None
+    for ruta in candidatos:
+        if ruta in vistos:
+            continue
+        vistos.add(ruta)
+        try:
+            os.makedirs(ruta, exist_ok=True)
+            return ruta
+        except OSError as exc:
+            ultimo_error = exc
+    raise RuntimeError(
+        f"No se pudo crear la carpeta del motor: {ultimo_error}. "
+        "Revisa los permisos de tu usuario y vuelve a intentarlo.")
 
 
 def _tipo_pg(tipo: str) -> str:
@@ -91,8 +141,9 @@ class PGServer:
         if PG_BIN_DIR is None:
             raise RuntimeError("Sin binarios PostgreSQL vendoreados.")
         self._psycopg = psycopg
-        # El template vive en subdir propio: initdb exige directorio vacío.
-        self.base = os.path.join(base_dir or tempfile.gettempdir(), _TEMPLATE_DIR)
+        # El template vive en subdir propio (initdb exige directorio vacío)
+        # y fuera de %TEMP% para sobrevivir a los limpiadores de Temp.
+        self.base = _resolver_base(base_dir)
         self.usuario = usuario
         self._proc: subprocess.Popen | None = None
         self.puerto: int | None = None
@@ -115,9 +166,25 @@ class PGServer:
         return os.path.join(PG_BIN_DIR, nombre)
 
     def _asegurar_cluster(self) -> None:
-        """initdb solo si el template no existe (9 s la primera vez)."""
+        """initdb solo si el template no existe (9 s la primera vez).
+
+        Si `PG_VERSION` desapareció (limpiador de Temp dejó el cluster a
+        medias) se vacía y se vuelve a inicializar; si otro proceso sirve ya
+        este data-dir, se adopta sin tocar nada (spec fix-template-pg-corrupto).
+        """
         if os.path.isfile(os.path.join(self.base, "PG_VERSION")):
             return
+        estado = self._recuperar_servidor()
+        if estado == "adoptado":
+            return
+        if estado == "servidor_vivo":
+            # Regla de seguridad: jamás vaciar un data-dir con un servidor vivo.
+            raise RuntimeError(
+                f"Hay un servidor PostgreSQL activo sobre esta carpeta y no "
+                f"responde: {self.base}. Cierra todas las ventanas de SQLab, "
+                "borra esa carpeta y vuelve a abrir la app.")
+        if os.path.isdir(self.base) and os.listdir(self.base):
+            self._vaciar_template()
         os.makedirs(self.base, exist_ok=True)
         r = subprocess.run(
             [self._exe("initdb.exe"), "-D", self.base, "-E", "UTF8",
@@ -126,7 +193,116 @@ class PGServer:
             cwd=PG_BIN_DIR, timeout=300,
         )
         if r.returncode != 0:
+            # Otra instancia ganó la carrera de primer arranque doble: si
+            # acaba de llenar el directorio, su servidor terminará de subir.
+            if self._adoptar_tras_carrera(r.stdout + r.stderr):
+                return
             raise RuntimeError(f"initdb falló:\n{(r.stdout + r.stderr)[-1500:]}")
+
+    def _recuperar_servidor(self) -> str:
+        """Decide entre adoptar, esperar o reparar cuando falta `PG_VERSION`.
+
+        Devuelve `"adoptado"` (otro proceso ya sirve este data-dir),
+        `"servidor_vivo"` (hay servidor escuchando pero no responde: no se
+        puede tocar el directorio) o `"nada"` (pid rancio/ausente → reparar).
+
+        Si el limpiador borró `PG_VERSION` **en caliente**, el postmaster sigue
+        vivo pero rechaza las conexiones: se restaura ese marcador (era el
+        archivo purgado, `17\\n`) para poder adoptarlo. Si aun así no responde,
+        la marca se deshace para no enmascarar la corrupción (E-01, CR-03).
+        """
+        if self._adoptar_ajeno():
+            return "adoptado"
+        puerto = self._puerto_pid()
+        if puerto is None:
+            return "nada"
+        for intento in range(10):  # ~5 s: cubre arranques/adopciones lentas
+            if intento:
+                time.sleep(0.5)
+            if not self._puerto_vivo(puerto):
+                continue
+            self._restaurar_pg_version()
+            if self._adoptar_ajeno():
+                return "adoptado"
+            self._deshacer_pg_version()
+            return "servidor_vivo"
+        return "nada"
+
+    @staticmethod
+    def _puerto_vivo(puerto: int) -> bool:
+        """¿Escucha algo en el puerto del data-dir? (sondeo TCP, sin SQL)."""
+        try:
+            with socket.create_connection(("127.0.0.1", puerto), timeout=1):
+                return True
+        except OSError:
+            return False
+
+    def _puerto_pid(self) -> int | None:
+        """Puerto declarado en el postmaster.pid del data-dir (None si no hay).
+
+        postmaster.pid va en el encoding del SO (p. ej. cp1252): se leen bytes
+        y se tolera lo no ASCII (el puerto es ASCII).
+        """
+        try:
+            with open(os.path.join(self.base, "postmaster.pid"), "rb") as fh:
+                lineas = fh.read().decode("ascii", errors="ignore").splitlines()
+            return int(lineas[3].strip())
+        except Exception:
+            return None
+
+    def _restaurar_pg_version(self) -> None:
+        """Reescribe la marca de versión que borró el limpiador (bytes originales)."""
+        with open(os.path.join(self.base, "PG_VERSION"), "wb") as fh:
+            fh.write(f"{PG_VERSION}\n".encode("ascii"))
+
+    def _deshacer_pg_version(self) -> None:
+        """Quita la marca recién escrita si sigue igual: no enmascarar (E-01)."""
+        ruta = os.path.join(self.base, "PG_VERSION")
+        try:
+            with open(ruta, "rb") as fh:
+                contenido = fh.read()
+        except OSError:
+            return
+        if contenido == f"{PG_VERSION}\n".encode("ascii"):
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
+
+    def _vaciar_template(self) -> None:
+        """Borra un template parcial/corrupto: initdb exige directorio vacío (CR-01).
+
+        Tres intentos con pausa por si un proceso suelto lo tiene bloqueado
+        (Windows no permite borrar ficheros en uso); si persiste, error
+        accionable para el usuario (CR-06).
+        """
+        for _ in range(3):
+            shutil.rmtree(self.base, ignore_errors=True)
+            if not os.path.isdir(self.base) or not os.listdir(self.base):
+                return
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"No se pudo reparar el motor: la carpeta {self.base} está "
+            "bloqueada. Cierra SQLab, borra esa carpeta a mano y vuelve a "
+            "abrir la app.")
+
+    def _adoptar_tras_carrera(self, salida: str) -> bool:
+        """Tras un initdb fallido por 'no vacío', adopta al par que ganó (CR-04).
+
+        Solo cuando el mensaje indica directorio no vacío (EN/ES): initdb del
+        gemelo puede estar en marcha (~9 s) y su servidor arranca después, así
+        que se sondea ~20 s antes de rendirse.
+        """
+        bajo = salida.lower()
+        if "not empty" not in bajo and "no está vacío" not in bajo and "no esta vacio" not in bajo:
+            return False
+        if self._adoptar_ajeno():
+            return True
+        for _ in range(40):
+            time.sleep(0.5)
+            if self._adoptar_ajeno():
+                return True
+        return False
 
     def _adoptar_ajeno(self) -> bool:
         """Si otro proceso ya sirve este data-dir, adoptarlo (puerto de postmaster.pid).
@@ -134,13 +310,8 @@ class PGServer:
         Permite N apps/tests sobre el mismo template sin lock de postmaster.
         Un postmaster.pid rancio (crash) no conecta → se arranca propio.
         """
-        try:
-            # postmaster.pid va en el encoding del SO (p. ej. cp1252):
-            # leer bytes y tolerar (el puerto es ASCII).
-            with open(os.path.join(self.base, "postmaster.pid"), "rb") as fh:
-                lineas = fh.read().decode("ascii", errors="ignore").splitlines()
-            puerto = int(lineas[3].strip())
-        except Exception:
+        puerto = self._puerto_pid()
+        if puerto is None:
             return False
         try:
             conn = self._psycopg.connect(
@@ -380,4 +551,7 @@ class PGEngine:
         return [c.name for c in t.columns] if t else []
 
 
-__all__ = ["PGEngine", "PGServer", "PG_BIN_DIR", "PG_VERSION", "_tipo_pg"]
+__all__ = [
+    "PGEngine", "PGServer", "PG_BIN_DIR", "PG_VERSION", "_tipo_pg",
+    "_dir_base_default", "_resolver_base",
+]
