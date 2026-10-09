@@ -71,3 +71,84 @@ def test_fe04_e2e_sqlstate_real(tmp_path):
         assert not r.ok and "No existe la columna" in r.error
     finally:
         eng.close()
+
+
+_EN_42803 = (
+    'column "products.product_name" must appear in the GROUP BY clause '
+    "or be used in an aggregate function"
+)
+_ES_42803 = (
+    "la columna «products.product_name» debe aparecer en la cláusula GROUP BY "
+    "o ser usada en una función de agregación"
+)
+
+
+def test_fe05a_42803_ingles():
+    """FE-05: 42803 EN → español con columna + regla + hint de arreglo."""
+    msg = friendly_pg_error(_EN_42803, sqlstate="42803")
+    assert "product_name" in msg
+    assert "GROUP BY" in msg
+    assert "MAX()" in msg or "MAX(" in msg
+    assert "No existe la función" not in msg
+
+
+def test_fe05b_42803_espanol():
+    """FE-05: variante ES real del servidor local (locale initdb) → mismo tono."""
+    msg = friendly_pg_error(_ES_42803, sqlstate="42803")
+    assert "product_name" in msg
+    assert "GROUP BY" in msg
+    assert "MAX(" in msg
+    assert "No existe la función" not in msg
+
+
+def test_fe05c_42803_sin_sqlstate_no_cae_en_funcion():
+    """FE-05: solo texto (sin sqlstate) → el patrón dedicado va ANTES de función."""
+    msg = friendly_pg_error(_ES_42803)
+    assert "GROUP BY" in msg and "MAX(" in msg
+    assert "No existe la función" not in msg
+    msg = friendly_pg_error(_EN_42803)
+    assert "GROUP BY" in msg and "MAX(" in msg
+    assert "No existe la función" not in msg
+
+
+def test_fe05d_42803_sqlstate_mensaje_inesperado():
+    """FE-05: 42803 con texto no reconocible → genérico, nunca el de función."""
+    msg = friendly_pg_error("grouping error inesperado zzz", sqlstate="42803")
+    assert "No existe la función" not in msg
+    assert "zzz" in msg
+
+
+@salta_sin_pg
+def test_fe05e_e2e_42803_real(tmp_path):
+    """FE-05 e2e: consulta real con columna suelta en GROUP BY → error amigable."""
+    from core.pg_engine import PGEngine
+    from core.sqlite_engine import Column, Table
+    eng = PGEngine(base_dir=str(tmp_path))
+    try:
+        eng.load_tables([Table(
+            name="products",
+            columns=[Column("product_id", "INTEGER"), Column("product_name", "TEXT"),
+                     Column("category", "TEXT"), Column("price", "REAL")],
+            rows=[[1, "Laptop", "Electronica", 1000.0], [2, "Mouse", "Electronica", 20.0],
+                  [3, "Silla", "Muebles", 80.0]],
+        )])
+        r = eng.execute(
+            "SELECT category, product_name, MAX(price) FROM products GROUP BY category"
+        )
+        assert not r.ok
+        assert "product_name" in r.error
+        assert "GROUP BY" in r.error
+        assert "No existe la función" not in r.error
+    finally:
+        eng.close()
+
+
+def test_fe06_sintaxis_es_en_o_cerca_de():
+    """FE-06: variante ES real «en o cerca de» → misma plantilla que «cerca de»."""
+    msg = friendly_pg_error(
+        "error de sintaxis en o cerca de «FROM» LINE 1: SELECT(AVG(x) FROM t",
+        sqlstate="42601",
+    )
+    assert "sintaxis" in msg.lower()
+    assert "from" in msg.lower()
+    assert "La base de datos respondió" not in msg

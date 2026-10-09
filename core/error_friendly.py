@@ -48,9 +48,13 @@ _PATRONES_PG: list[tuple[str, str]] = [
     (r'column "([^"]+)" .* specified more than once', "La columna «{0}» está repetida. Quita el duplicado."),
     (r'm[áa]s de una vez', "Hay una columna repetida. Quita el duplicado."),
     (r'syntax error at or near "([^"]*)"', "Error de sintaxis cerca de «{0}». Revisa la ortografía del SQL, los espacios y las comas."),
-    (r'error de sintaxis (?:cerca de|cercano a) «?([^»"]*)»?', "Error de sintaxis cerca de «{0}». Revisa la ortografía del SQL, los espacios y las comas."),
+    (r'error de sintaxis (?:en o cerca de|cerca de|cercano a) «?([^»"]*)»?', "Error de sintaxis cerca de «{0}». Revisa la ortografía del SQL, los espacios y las comas."),
     (r'syntax error at end of input', "La consulta está incompleta. Revísala; suele faltar un valor, un paréntesis o un cierre de cadena."),
     (r'error de sintaxis al final de la entrada', "La consulta está incompleta. Revísala; suele faltar un valor, un paréntesis o un cierre de cadena."),
+    (r'column "([^"]+)" must appear in the group by clause',
+     "La columna «{0}» está en el SELECT pero no en el GROUP BY. Agrégala al GROUP BY o envuélvela en MAX(), MIN(), AVG(), SUM() o COUNT(). (SQLite la permite suelta; PostgreSQL exige agruparla.)"),
+    (r'la columna «([^»]+)» debe aparecer en la cl[áa]usula group by',
+     "La columna «{0}» está en el SELECT pero no en el GROUP BY. Agrégala al GROUP BY o envuélvela en MAX(), MIN(), AVG(), SUM() o COUNT(). (SQLite la permite suelta; PostgreSQL exige agruparla.)"),
     (r'function ([^(]+)\([^)]*\) does not exist', "No existe la función «{0}» con esos tipos de datos. Revisa los tipos de los argumentos (p. ej. date_part necesita texto + fecha)."),
     (r'funci[óo]n ([^(«]+?)\(', "No existe la función «{0}» con esos tipos de datos. Revisa los tipos de los argumentos (p. ej. date_part necesita texto + fecha)."),
     (r'invalid input syntax for type (\w+)', "El valor no encaja en el tipo {0}. Revisa el formato (p. ej. fechas 'AAAA-MM-DD', números con punto)."),
@@ -68,8 +72,8 @@ _PATRONES_PG: list[tuple[str, str]] = [
 # SQLSTATE → índice en _PATRONES_PG (variante inglesa; si no matchea se
 # recorre la lista completa, cubriendo español).
 _SQLSTATE_PG: dict[str, int | None] = {
-    "42P01": 0, "42703": 2, "42701": 4, "42601": 6,
-    "42883": 10, "22P02": 12, "23505": 14, "23503": 16, "23502": 18, "22012": 20,
+    "42P01": 0, "42703": 2, "42701": 4, "42601": 6, "42803": 10,
+    "42883": 12, "22P02": 14, "23505": 16, "23503": 18, "23502": 20, "22012": 22,
 }
 
 

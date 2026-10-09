@@ -1,6 +1,6 @@
 # specs/INDEX.md — Mapa de specs ↔ tests ↔ design.md
 
-> **Última actualización**: 2026-10-07 — v35 (fix template PG corrupto).
+> **Última actualización**: 2026-10-07 — v36 (42803 GROUP BY amigable).
 > Specs retroactivas v1-v9 sin TDD; v10+ con ciclo Spec→Test→Implement completo.
 
 | Spec ID | Archivo spec | Archivos a testear | Tests existentes | design.md |
@@ -40,7 +40,7 @@
 | `comparar-consultas` | `specs/comparar-consultas.md` | `core/comparar.py`, `ui/paneles.py`, `ui/main_window.py` | `tests/test_comparar_consultas.py` (5) | design.md (análisis v27) |
 | `graficos-basicos` | `specs/graficos-basicos.md` | `ui/graficos.py`, `ui/main_window.py` | `tests/test_graficos.py` (7) | design.md (análisis v27) |
 | `pg-engine` | `specs/pg-engine.md` | `core/pg_engine.py` | `tests/test_pg_engine.py` (5, skip sin binarios) | design.md (migración PG v30) |
-| `error-friendly-pg` | `specs/error-friendly-pg.md` | `core/error_friendly.py`, `core/pg_engine.py` | `tests/test_error_friendly_pg.py` (5) | design.md (migración PG v31) |
+| `error-friendly-pg` | `specs/error-friendly-pg.md` | `core/error_friendly.py`, `core/pg_engine.py` | `tests/test_error_friendly_pg.py` (11) | design.md (migración PG v31, enmienda v36) |
 | `carga-tipos-pg` | `specs/carga-tipos-pg.md` | `core/session_loader.py` | `tests/test_carga_tipos_pg.py` (5) | design.md (migración PG v32) |
 | `f4-corte-postgres` | `specs/f4-corte-postgres.md` | `ui/*`, `core/pg_engine.py`, `tests/conftest.py` | `tests/test_corte_pg.py` (8) | design.md (migración PG v33) |
 | `fix-template-pg-corrupto` | `specs/fix-template-pg-corrupto.md` | `core/pg_engine.py` (`_asegurar_cluster`, `_recuperar_servidor`, `_resolver_base`) | `tests/test_fix_template_pg.py` (12, 2 skip sin binarios) | design.md (bugfix v35) |
